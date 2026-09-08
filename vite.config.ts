@@ -5,6 +5,8 @@ import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import react from "@vitejs/plugin-react";
 import { nitro } from "nitro/vite";
 
+const isVercel = Boolean(process.env.VERCEL);
+
 export default defineConfig(({ command }) => ({
   server: { host: "::", port: 8080 },
   css: { transformer: "lightningcss" },
@@ -28,12 +30,19 @@ export default defineConfig(({ command }) => ({
         client: { files: ["**/server/**"], specifiers: ["server-only"] },
       },
     }),
-    // Match the Node host's production entry: .output/server/index.mjs.
+    // Vercel: Nitro vercel preset → .vercel/output (Build Output API).
+    // Local/Node: node-server → .output/server/index.mjs for `npm start`.
     command === "build" &&
-      nitro({
-        preset: "node-server",
-        output: { dir: ".output", serverDir: ".output/server", publicDir: ".output/public" },
-      }),
+      (isVercel
+        ? nitro({ preset: "vercel" })
+        : nitro({
+            preset: "node-server",
+            output: {
+              dir: ".output",
+              serverDir: ".output/server",
+              publicDir: ".output/public",
+            },
+          })),
     react(),
   ],
 }));
