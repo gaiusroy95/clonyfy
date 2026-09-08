@@ -68,9 +68,11 @@ export function AuthShell({
       const message =
         err instanceof ApiError
           ? err.message
-          : mode === "login"
-            ? tr("Could not log in. Check your email and password.")
-            : tr("Could not create your account. Please try again.");
+          : err instanceof TypeError || (err instanceof Error && /Failed to fetch|NetworkError|abort/i.test(err.message))
+            ? tr("Cannot reach the API. Check that the Backend is online and VITE_API_BASE_URL is set on Vercel.")
+            : mode === "login"
+              ? tr("Could not log in. Check your email and password.")
+              : tr("Could not create your account. Please try again.");
       setError(message);
     } finally {
       setBusy(false);
