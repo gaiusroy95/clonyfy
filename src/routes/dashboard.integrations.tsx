@@ -171,7 +171,7 @@ function IntegrationsPage() {
         ))}
       </div>
       <p className="surface rounded-2xl p-5 text-sm text-muted-foreground" role="status">
-        {notice || "Connect GitHub when you are ready to publish a clone to a repository."}
+        {notice || "Connect GitHub when you are ready. Push from a finished capture (Library → capture → Push to GitHub)."}
       </p>
     </div>
   );

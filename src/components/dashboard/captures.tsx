@@ -1,16 +1,31 @@
 import { useState } from "react";
-import { Download, ExternalLink, Eye, Link2, Search, Trash2 } from "lucide-react";
+import { Link } from "@tanstack/react-router";
+import {
+  Download,
+  ExternalLink,
+  Eye,
+  Figma,
+  Github,
+  Link2,
+  Pencil,
+  Search,
+  Trash2,
+} from "lucide-react";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import type { CloneJob, CloneStatus } from "./data";
+import { GitHubPushDialog } from "./github-push-dialog";
 import {
   ApiError,
   createShareLink,
   deleteOutput,
+  downloadFigmaSvgBlob,
+  downloadFigmaZipBlob,
   downloadZipBlob,
   getApiBaseUrl,
   pagePreviewUrl,
   previewClone,
+  triggerBrowserDownload,
 } from "@/lib/api";
 
 export const STATUS_LABELS: Record<CloneStatus, string> = {
@@ -102,8 +117,16 @@ export function CaptureDetails({
 }) {
   const [busy, setBusy] = useState("");
   const [iframeError, setIframeError] = useState(false);
+  const [githubOpen, setGithubOpen] = useState(false);
   const canPreview = !!job?.outDir && job.status === "done";
   const previewSrc = canPreview && job?.outDir ? pagePreviewUrl(job.outDir) : "";
+
+  const paidGateMessage = (err: unknown, feature: string) => {
+    if (err instanceof ApiError && err.status === 403) {
+      return err.message || `${feature} requires a paid plan. Upgrade in Subscription.`;
+    }
+    return err instanceof ApiError ? err.message : `${feature} failed.`;
+  };
 
   const openPreview = async () => {
     if (!job?.outDir) {
@@ -134,15 +157,44 @@ export function CaptureDetails({
     setBusy("zip");
     try {
       const blob = await downloadZipBlob(job.outDir);
-      const href = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = href;
-      a.download = `${job.domain || "clone"}.zip`;
-      a.click();
-      URL.revokeObjectURL(href);
+      triggerBrowserDownload(blob, `${job.domain || "clone"}.zip`);
       toast.success("ZIP downloaded.");
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : "ZIP export failed.");
+      toast.error(paidGateMessage(err, "ZIP export"));
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const downloadFigmaSvg = async () => {
+    if (!job?.outDir) {
+      toast.error("Figma export is available after the clone finishes.");
+      return;
+    }
+    setBusy("figma-svg");
+    try {
+      const { blob, filename } = await downloadFigmaSvgBlob(job.outDir, "/");
+      triggerBrowserDownload(blob, filename);
+      toast.success("Figma SVG downloaded.");
+    } catch (err) {
+      toast.error(paidGateMessage(err, "Figma export"));
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const downloadFigmaZip = async () => {
+    if (!job?.outDir) {
+      toast.error("Figma export is available after the clone finishes.");
+      return;
+    }
+    setBusy("figma-zip");
+    try {
+      const { blob, filename } = await downloadFigmaZipBlob(job.outDir);
+      triggerBrowserDownload(blob, filename);
+      toast.success("Figma ZIP downloaded.");
+    } catch (err) {
+      toast.error(paidGateMessage(err, "Figma export"));
     } finally {
       setBusy("");
     }
@@ -277,6 +329,16 @@ export function CaptureDetails({
                 <Eye size={16} />
                 {busy === "preview" ? "Opening…" : "Open preview"}
               </button>
+              {job.outDir && job.status === "done" && (
+                <Link
+                  to="/dashboard/editor"
+                  search={{ outDir: job.outDir, route: "/" }}
+                  className="dashboard-button"
+                >
+                  <Pencil size={16} />
+                  Edit pages
+                </Link>
+              )}
               <button
                 type="button"
                 className="dashboard-button bg-primary text-primary-foreground"
@@ -285,6 +347,33 @@ export function CaptureDetails({
               >
                 <Download size={16} />
                 {busy === "zip" ? "Preparing ZIP…" : "Download ZIP"}
+              </button>
+              <button
+                type="button"
+                className="dashboard-button"
+                onClick={() => void downloadFigmaSvg()}
+                disabled={!job.outDir || busy === "figma-svg"}
+              >
+                <Figma size={16} />
+                {busy === "figma-svg" ? "Exporting…" : "Figma SVG"}
+              </button>
+              <button
+                type="button"
+                className="dashboard-button"
+                onClick={() => void downloadFigmaZip()}
+                disabled={!job.outDir || busy === "figma-zip"}
+              >
+                <Figma size={16} />
+                {busy === "figma-zip" ? "Exporting…" : "Figma ZIP"}
+              </button>
+              <button
+                type="button"
+                className="dashboard-button"
+                onClick={() => setGithubOpen(true)}
+                disabled={!job.outDir || job.status !== "done"}
+              >
+                <Github size={16} />
+                Push to GitHub
               </button>
               <button
                 type="button"
@@ -324,6 +413,14 @@ export function CaptureDetails({
           </>
         )}
       </DialogContent>
+      {job?.outDir && (
+        <GitHubPushDialog
+          open={githubOpen}
+          onOpenChange={setGithubOpen}
+          outDir={job.outDir}
+          domain={job.domain}
+        />
+      )}
     </Dialog>
   );
 }

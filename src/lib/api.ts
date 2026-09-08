@@ -277,14 +277,122 @@ export async function previewClone(outDir: string) {
   });
 }
 
-export function pagePreviewUrl(outDir: string, route = "/") {
+export function pagePreviewUrl(outDir: string, route = "/", mode?: "editor") {
   const token = getAuthToken();
   const params = new URLSearchParams({
     outDir,
     route,
   });
+  if (mode) params.set("mode", mode);
   if (token) params.set("access_token", token);
   return `${getApiBaseUrl()}/api/page?${params.toString()}`;
+}
+
+export async function fetchClonePages(outDir: string) {
+  return apiFetch<string[]>(`/api/pages?outDir=${encodeURIComponent(outDir)}`);
+}
+
+export async function fetchPageHtml(outDir: string, route = "/", mode?: "editor") {
+  const token = getAuthToken();
+  const params = new URLSearchParams({ outDir, route });
+  if (mode) params.set("mode", mode);
+  const res = await fetch(`${getApiBaseUrl()}/api/page?${params.toString()}`, {
+    headers: token ? { "X-Auth-Token": token } : {},
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    let message = `HTTP ${res.status}`;
+    try {
+      const data = JSON.parse(text) as { error?: string };
+      if (data.error) message = data.error;
+    } catch {
+      if (text) message = text.slice(0, 200);
+    }
+    throw new ApiError(message, res.status);
+  }
+  return text;
+}
+
+export async function savePage(outDir: string, route: string, html: string) {
+  return apiFetch<{ ok: boolean; usage?: { kind: string; used: number; limit: number | null } }>(
+    "/api/save-page",
+    {
+      method: "POST",
+      body: { outDir, route, html },
+      timeoutMs: 120_000,
+    },
+  );
+}
+
+export async function importAsset(outDir: string, dataUrl: string, filename?: string) {
+  return apiFetch<{ ok: boolean; path: string; previewUrl?: string; mimeType?: string; size?: number }>(
+    "/api/import-asset",
+    {
+      method: "POST",
+      body: { outDir, dataUrl, filename },
+      timeoutMs: 120_000,
+    },
+  );
+}
+
+export async function consumeUsage(kind: "edit" | "save" | "share", outDir?: string) {
+  return apiFetch<{ ok: boolean; usage?: { kind: string; used: number; limit: number | null } }>(
+    "/api/usage/consume",
+    {
+      method: "POST",
+      body: { kind, outDir },
+    },
+  );
+}
+
+export function downloadFigmaSvgUrl(outDir: string, route = "/") {
+  const params = new URLSearchParams({ outDir, route });
+  return `${getApiBaseUrl()}/api/download-figma?${params.toString()}`;
+}
+
+export function downloadFigmaZipUrl(outDir: string) {
+  const params = new URLSearchParams({ outDir });
+  return `${getApiBaseUrl()}/api/download-figma-zip?${params.toString()}`;
+}
+
+async function downloadAuthedBlob(url: string, fallbackName: string): Promise<{ blob: Blob; filename: string }> {
+  const token = getAuthToken();
+  const res = await fetch(url, {
+    headers: token ? { "X-Auth-Token": token } : {},
+  });
+  const contentType = String(res.headers.get("content-type") || "");
+  if (contentType.includes("application/json")) {
+    const data = (await res.json()) as { error?: string };
+    throw new ApiError(data.error || `HTTP ${res.status}`, res.status, data);
+  }
+  if (!res.ok) throw new ApiError(`HTTP ${res.status}`, res.status);
+  const disposition = res.headers.get("content-disposition") || "";
+  const match = disposition.match(/filename="?([^"]+)"?/i);
+  return { blob: await res.blob(), filename: match?.[1] || fallbackName };
+}
+
+export async function downloadFigmaSvgBlob(outDir: string, route = "/") {
+  return downloadAuthedBlob(downloadFigmaSvgUrl(outDir, route), "page.svg");
+}
+
+export async function downloadFigmaZipBlob(outDir: string) {
+  return downloadAuthedBlob(downloadFigmaZipUrl(outDir), "clone-figma.zip");
+}
+
+export async function fetchGitHubBranches(token: string, repo: string) {
+  return apiFetch<{ ok: boolean; branches: string[] }>("/api/github/branches", {
+    method: "POST",
+    body: { token, repo },
+  });
+}
+
+export function triggerBrowserDownload(blob: Blob, filename: string) {
+  const href = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = href;
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(href), 1500);
 }
 
 export async function createShareLink(outDir: string, route = "/") {
@@ -346,7 +454,12 @@ export async function pushToGitHub(input: {
   branch?: string;
   commitMessage?: string;
 }) {
-  return apiFetch<{ ok: boolean; url?: string }>("/api/github/push", {
+  return apiFetch<{
+    ok: boolean;
+    url?: string;
+    commitUrl?: string;
+    repoUrl?: string;
+  }>("/api/github/push", {
     method: "POST",
     body: input,
     timeoutMs: 180_000,

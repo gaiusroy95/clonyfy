@@ -24,6 +24,7 @@ import { Route as DashboardAnalyticsRouteImport } from './routes/dashboard.analy
 import { Route as DashboardBillingRouteImport } from './routes/dashboard.billing'
 import { Route as DashboardCalendarRouteImport } from './routes/dashboard.calendar'
 import { Route as DashboardDocumentsRouteImport } from './routes/dashboard.documents'
+import { Route as DashboardEditorRouteImport } from './routes/dashboard.editor'
 import { Route as DashboardIntegrationsRouteImport } from './routes/dashboard.integrations'
 import { Route as DashboardLibraryRouteImport } from './routes/dashboard.library'
 import { Route as DashboardOverviewRouteImport } from './routes/dashboard.overview'
@@ -109,6 +110,11 @@ const DashboardDocumentsRoute = DashboardDocumentsRouteImport.update({
   path: '/documents',
   getParentRoute: () => DashboardRoute,
 } as any)
+const DashboardEditorRoute = DashboardEditorRouteImport.update({
+  id: '/editor',
+  path: '/editor',
+  getParentRoute: () => DashboardRoute,
+} as any)
 const DashboardIntegrationsRoute = DashboardIntegrationsRouteImport.update({
   id: '/integrations',
   path: '/integrations',
@@ -170,6 +176,7 @@ export interface FileRoutesByFullPath {
   '/dashboard/billing': typeof DashboardBillingRoute
   '/dashboard/calendar': typeof DashboardCalendarRoute
   '/dashboard/documents': typeof DashboardDocumentsRoute
+  '/dashboard/editor': typeof DashboardEditorRoute
   '/dashboard/integrations': typeof DashboardIntegrationsRoute
   '/dashboard/library': typeof DashboardLibraryRoute
   '/dashboard/overview': typeof DashboardOverviewRoute
@@ -194,6 +201,7 @@ export interface FileRoutesByTo {
   '/dashboard/billing': typeof DashboardBillingRoute
   '/dashboard/calendar': typeof DashboardCalendarRoute
   '/dashboard/documents': typeof DashboardDocumentsRoute
+  '/dashboard/editor': typeof DashboardEditorRoute
   '/dashboard/integrations': typeof DashboardIntegrationsRoute
   '/dashboard/library': typeof DashboardLibraryRoute
   '/dashboard/overview': typeof DashboardOverviewRoute
@@ -221,6 +229,7 @@ export interface FileRoutesById {
   '/dashboard/billing': typeof DashboardBillingRoute
   '/dashboard/calendar': typeof DashboardCalendarRoute
   '/dashboard/documents': typeof DashboardDocumentsRoute
+  '/dashboard/editor': typeof DashboardEditorRoute
   '/dashboard/integrations': typeof DashboardIntegrationsRoute
   '/dashboard/library': typeof DashboardLibraryRoute
   '/dashboard/overview': typeof DashboardOverviewRoute
@@ -249,6 +258,7 @@ export interface FileRouteTypes {
     | '/dashboard/billing'
     | '/dashboard/calendar'
     | '/dashboard/documents'
+    | '/dashboard/editor'
     | '/dashboard/integrations'
     | '/dashboard/library'
     | '/dashboard/overview'
@@ -273,6 +283,7 @@ export interface FileRouteTypes {
     | '/dashboard/billing'
     | '/dashboard/calendar'
     | '/dashboard/documents'
+    | '/dashboard/editor'
     | '/dashboard/integrations'
     | '/dashboard/library'
     | '/dashboard/overview'
@@ -299,6 +310,7 @@ export interface FileRouteTypes {
     | '/dashboard/billing'
     | '/dashboard/calendar'
     | '/dashboard/documents'
+    | '/dashboard/editor'
     | '/dashboard/integrations'
     | '/dashboard/library'
     | '/dashboard/overview'
@@ -430,6 +442,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DashboardDocumentsRouteImport
       parentRoute: typeof DashboardRoute
     }
+    '/dashboard/editor': {
+      id: '/dashboard/editor'
+      path: '/editor'
+      fullPath: '/dashboard/editor'
+      preLoaderRoute: typeof DashboardEditorRouteImport
+      parentRoute: typeof DashboardRoute
+    }
     '/dashboard/integrations': {
       id: '/dashboard/integrations'
       path: '/integrations'
@@ -502,6 +521,7 @@ interface DashboardRouteChildren {
   DashboardBillingRoute: typeof DashboardBillingRoute
   DashboardCalendarRoute: typeof DashboardCalendarRoute
   DashboardDocumentsRoute: typeof DashboardDocumentsRoute
+  DashboardEditorRoute: typeof DashboardEditorRoute
   DashboardIntegrationsRoute: typeof DashboardIntegrationsRoute
   DashboardLibraryRoute: typeof DashboardLibraryRoute
   DashboardOverviewRoute: typeof DashboardOverviewRoute
@@ -517,6 +537,7 @@ const DashboardRouteChildren: DashboardRouteChildren = {
   DashboardBillingRoute: DashboardBillingRoute,
   DashboardCalendarRoute: DashboardCalendarRoute,
   DashboardDocumentsRoute: DashboardDocumentsRoute,
+  DashboardEditorRoute: DashboardEditorRoute,
   DashboardIntegrationsRoute: DashboardIntegrationsRoute,
   DashboardLibraryRoute: DashboardLibraryRoute,
   DashboardOverviewRoute: DashboardOverviewRoute,
@@ -558,13 +579,3 @@ const rootRouteChildren: RootRouteChildren = {
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
-
-import type { getRouter } from './router.tsx'
-import type { startInstance } from './start.ts'
-declare module '@tanstack/react-start' {
-  interface Register {
-    ssr: true
-    router: Awaited<ReturnType<typeof getRouter>>
-    config: Awaited<ReturnType<typeof startInstance.getOptions>>
-  }
-}
