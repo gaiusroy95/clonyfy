@@ -61,15 +61,29 @@ export function AuthShell({
     const name = String(form.get("name") || "").trim();
     setBusy(true);
     try {
-      if (mode === "login") await login(email, password);
-      else await register(name, email, password);
+      const attempt = async () => {
+        if (mode === "login") await login(email, password);
+        else await register(name, email, password);
+      };
+      try {
+        await attempt();
+      } catch (first) {
+        const network =
+          !(first instanceof ApiError) &&
+          (first instanceof TypeError ||
+            (first instanceof Error && /Failed to fetch|NetworkError|abort/i.test(first.message)));
+        if (!network) throw first;
+        // Render free tier often needs a cold start; retry once after a short wait.
+        await new Promise((r) => setTimeout(r, 2500));
+        await attempt();
+      }
       await navigate({ to: "/dashboard" });
     } catch (err) {
       const message =
         err instanceof ApiError
           ? err.message
           : err instanceof TypeError || (err instanceof Error && /Failed to fetch|NetworkError|abort/i.test(err.message))
-            ? tr("Cannot reach the API. Check that the Backend is online and VITE_API_BASE_URL is set on Vercel.")
+            ? tr("Cannot reach the API. The Backend may be waking up (Render free tier) — wait ~30s and try again. Also use https://www.clonyfy.com.")
             : mode === "login"
               ? tr("Could not log in. Check your email and password.")
               : tr("Could not create your account. Please try again.");

@@ -135,6 +135,7 @@ export async function loginRequest(email: string, password: string, remember = t
     method: "POST",
     auth: false,
     body: { email, password, remember },
+    timeoutMs: 120_000,
   });
 }
 
@@ -143,6 +144,7 @@ export async function registerRequest(name: string, email: string, password: str
     method: "POST",
     auth: false,
     body: { name, email, password },
+    timeoutMs: 120_000,
   });
 }
 
