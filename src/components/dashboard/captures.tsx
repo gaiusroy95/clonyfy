@@ -8,7 +8,9 @@ import {
   createShareLink,
   deleteOutput,
   downloadZipBlob,
+  getApiBaseUrl,
   pagePreviewUrl,
+  previewClone,
 } from "@/lib/api";
 
 export const STATUS_LABELS: Record<CloneStatus, string> = {
@@ -83,6 +85,12 @@ export function CaptureStatus({ status }: { status: CloneStatus }) {
   );
 }
 
+function absoluteApiUrl(pathOrUrl: string) {
+  if (/^https?:\/\//i.test(pathOrUrl)) return pathOrUrl;
+  const base = getApiBaseUrl().replace(/\/$/, "");
+  return `${base}${pathOrUrl.startsWith("/") ? pathOrUrl : `/${pathOrUrl}`}`;
+}
+
 export function CaptureDetails({
   job,
   onClose,
@@ -93,14 +101,29 @@ export function CaptureDetails({
   onDeleted?: () => void;
 }) {
   const [busy, setBusy] = useState("");
+  const [iframeError, setIframeError] = useState(false);
   const canPreview = !!job?.outDir && job.status === "done";
+  const previewSrc = canPreview && job?.outDir ? pagePreviewUrl(job.outDir) : "";
 
-  const openPreview = () => {
+  const openPreview = async () => {
     if (!job?.outDir) {
       toast.error("Preview is available after the clone finishes.");
       return;
     }
-    window.open(pagePreviewUrl(job.outDir), "_blank", "noopener,noreferrer");
+    setBusy("preview");
+    try {
+      const data = await previewClone(job.outDir);
+      const url = data.url?.startsWith("http") ? data.url : pagePreviewUrl(job.outDir);
+      window.open(url, "_blank", "noopener,noreferrer");
+    } catch (err) {
+      toast.error(
+        err instanceof ApiError
+          ? err.message
+          : "Could not open preview. The Backend may still be waking or files were not persisted.",
+      );
+    } finally {
+      setBusy("");
+    }
   };
 
   const downloadZip = async () => {
@@ -133,7 +156,8 @@ export function CaptureDetails({
     setBusy("share");
     try {
       const data = await createShareLink(job.outDir);
-      await navigator.clipboard.writeText(data.url);
+      const url = absoluteApiUrl(data.url);
+      await navigator.clipboard.writeText(url);
       toast.success("Share link copied to clipboard.");
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : "Could not create share link.");
@@ -165,7 +189,10 @@ export function CaptureDetails({
     <Dialog
       open={!!job}
       onOpenChange={(open) => {
-        if (!open) onClose();
+        if (!open) {
+          setIframeError(false);
+          onClose();
+        }
       }}
     >
       <DialogContent className="dashboard-dialog" data-lenis-prevent>
@@ -195,24 +222,60 @@ export function CaptureDetails({
             </dl>
             {canPreview ? (
               <div className="overflow-hidden rounded-2xl border border-border">
-                <iframe
-                  title={`Preview ${job.domain}`}
-                  src={pagePreviewUrl(job.outDir!)}
-                  className="h-[320px] w-full bg-background"
-                  sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
-                />
+                {iframeError ? (
+                  <div className="flex h-[320px] flex-col items-center justify-center gap-3 bg-background px-6 text-center">
+                    <p className="text-sm text-muted-foreground">
+                      Inline preview could not load. Use Open preview to view it on the API host.
+                    </p>
+                    <button
+                      type="button"
+                      className="dashboard-button"
+                      onClick={() => void openPreview()}
+                      disabled={busy === "preview"}
+                    >
+                      <Eye size={16} />
+                      Open preview
+                    </button>
+                  </div>
+                ) : (
+                  <iframe
+                    title={`Preview ${job.domain}`}
+                    src={previewSrc}
+                    className="h-[320px] w-full bg-background"
+                    sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+                    onError={() => setIframeError(true)}
+                    onLoad={(event) => {
+                      try {
+                        const doc = event.currentTarget.contentDocument;
+                        const text = doc?.body?.innerText || "";
+                        if (/no clone loaded|not authenticated|not found/i.test(text)) {
+                          setIframeError(true);
+                        }
+                      } catch {
+                        /* cross-origin — treat as loaded if no hard error event */
+                      }
+                    }}
+                  />
+                )}
               </div>
             ) : (
               <p className="text-sm text-muted-foreground">
                 {job.status === "running"
                   ? "Clone is still running. Preview and export unlock when it finishes."
-                  : "Preview and export will appear once this capture has an output folder."}
+                  : job.status === "error"
+                    ? "This capture failed. Start a new clone to get a previewable output."
+                    : "Preview and export will appear once this capture has an output folder."}
               </p>
             )}
             <div className="flex flex-wrap gap-2">
-              <button type="button" className="dashboard-button" onClick={openPreview} disabled={!job.outDir}>
+              <button
+                type="button"
+                className="dashboard-button"
+                onClick={() => void openPreview()}
+                disabled={!job.outDir || busy === "preview"}
+              >
                 <Eye size={16} />
-                Open preview
+                {busy === "preview" ? "Opening…" : "Open preview"}
               </button>
               <button
                 type="button"
@@ -234,7 +297,11 @@ export function CaptureDetails({
               </button>
               <a
                 className="dashboard-button"
-                href={`https://${job.domain}`}
+                href={
+                  job.domain.includes("://")
+                    ? job.domain
+                    : `https://${job.domain.replace(/^\/+/, "")}`
+                }
                 target="_blank"
                 rel="noreferrer"
               >
@@ -275,18 +342,17 @@ export function CaptureTable({
       <div
         className="capture-table-scroll"
         data-scroll-region
-        data-lenis-prevent
         tabIndex={0}
         role="region"
-        aria-label={`${caption}, scroll horizontally for all columns`}
+        aria-label={caption}
       >
         <table className="capture-table">
-          <caption className="sr-only">{caption}. Select a website to inspect its capture.</caption>
+          <caption className="sr-only">{caption}</caption>
           <colgroup>
             <col />
-            <col className="capture-number-col" />
-            <col className="capture-number-col" />
-            <col className="capture-time-col" />
+            <col />
+            <col />
+            <col />
             <col className="capture-status-col" />
           </colgroup>
           <thead>
@@ -301,15 +367,11 @@ export function CaptureTable({
           <tbody>
             {jobs.map((job) => (
               <tr key={job.id}>
-                <th scope="row">
-                  <button
-                    onClick={() => setSelected(job)}
-                    className="capture-domain"
-                    title={job.domain}
-                  >
+                <td>
+                  <button type="button" className="capture-domain" onClick={() => setSelected(job)}>
                     {job.domain}
                   </button>
-                </th>
+                </td>
                 <td>{job.pages}</td>
                 <td>{job.assets}</td>
                 <td>{job.elapsed}</td>
@@ -321,29 +383,11 @@ export function CaptureTable({
           </tbody>
         </table>
       </div>
-      <ul className="capture-mobile-list" aria-label={caption}>
-        {jobs.map((job) => (
-          <li key={job.id}>
-            <button className="capture-mobile-domain" onClick={() => setSelected(job)}>
-              {job.domain}
-            </button>
-            <CaptureStatus status={job.status} />
-            <dl>
-              {[
-                ["Pages", job.pages],
-                ["Assets", job.assets],
-                ["Time", job.elapsed],
-              ].map(([label, value]) => (
-                <div key={label}>
-                  <dt>{label}</dt>
-                  <dd>{value}</dd>
-                </div>
-              ))}
-            </dl>
-          </li>
-        ))}
-      </ul>
-      <CaptureDetails job={selected} onClose={() => setSelected(null)} />
+      <CaptureDetails
+        job={selected}
+        onClose={() => setSelected(null)}
+        onDeleted={() => setSelected(null)}
+      />
     </>
   );
 }
@@ -359,32 +403,27 @@ export function CaptureSearch({
 }) {
   return (
     <label className="dashboard-search">
-      <Search size={16} aria-hidden="true" />
       <span className="sr-only">{label}</span>
+      <Search size={16} aria-hidden="true" />
       <input
-        type="search"
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        placeholder={label}
+        placeholder="Search by domain"
+        autoComplete="off"
       />
     </label>
   );
 }
 
-export function EmptyCaptures({ onReset }: { onReset: () => void }) {
+export function EmptyCaptures({ onReset }: { onReset?: () => void }) {
   return (
-    <div className="capture-empty">
-      <svg viewBox="0 0 160 96" fill="none" aria-hidden="true">
-        <rect x="24" y="12" width="96" height="64" rx="8" stroke="currentColor" opacity=".35" />
-        <path d="M24 30h96M40 44h44M40 56h28" stroke="currentColor" opacity=".4" />
-        <circle cx="112" cy="65" r="17" fill="var(--card)" stroke="currentColor" />
-        <path d="m125 78 12 12" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
-      </svg>
-      <h3>No matching captures</h3>
-      <p>Try another website or clear your filters.</p>
-      <button className="dashboard-button" onClick={onReset}>
-        Clear filters
-      </button>
+    <div className="rounded-2xl border border-dashed border-border px-6 py-12 text-center">
+      <p className="text-sm text-muted-foreground">No captures match this filter.</p>
+      {onReset ? (
+        <button type="button" className="dashboard-button mt-4" onClick={onReset}>
+          Reset filters
+        </button>
+      ) : null}
     </div>
   );
 }
