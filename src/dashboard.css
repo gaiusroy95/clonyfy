@@ -399,6 +399,10 @@
   color: #dfca9d;
   background: rgb(216 198 163 / 0.1);
 }
+.capture-status[data-status="error"] {
+  color: #e8a0a8;
+  background: rgb(220 80 90 / 0.12);
+}
 .capture-spinner {
   animation: capture-process 1.4s linear infinite;
 }

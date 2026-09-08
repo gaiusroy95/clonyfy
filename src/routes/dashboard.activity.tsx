@@ -70,6 +70,7 @@ function ActivityPage() {
               { value: "all", label: "All statuses" },
               { value: "running", label: "Running" },
               { value: "done", label: "Complete" },
+              { value: "error", label: "Failed" },
               { value: "queued", label: "Queued" },
             ]}
           />

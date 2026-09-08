@@ -1,4 +1,4 @@
-export type CloneStatus = "done" | "running" | "queued";
+export type CloneStatus = "done" | "running" | "queued" | "error";
 
 export type CloneJob = {
   id: string;

@@ -15,6 +15,7 @@ export const STATUS_LABELS: Record<CloneStatus, string> = {
   done: "Complete",
   running: "Running",
   queued: "Queued",
+  error: "Failed",
 };
 
 export function downloadCaptureReport(jobs: CloneJob[]) {
@@ -57,6 +58,13 @@ export function CaptureStatus({ status }: { status: CloneStatus }) {
             strokeWidth="1.8"
             strokeLinecap="round"
             strokeLinejoin="round"
+          />
+        ) : status === "error" ? (
+          <path
+            d="M5 5l6 6M11 5l-6 6"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
           />
         ) : (
           <>
