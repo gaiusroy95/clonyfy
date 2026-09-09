@@ -787,7 +787,8 @@ export async function pushToGitHub(input: {
   }>("/api/github/push", {
     method: "POST",
     body: input,
-    timeoutMs: 240_000,
+    // Large clones upload many blobs in batches; allow up to 10 minutes.
+    timeoutMs: 600_000,
   });
 }
 
