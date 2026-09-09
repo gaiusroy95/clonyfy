@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Github } from "lucide-react";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
-import { ApiError, fetchGitHubBranches, pushToGitHub } from "@/lib/api";
+import { ApiError, ensureApiAwake, fetchGitHubBranches, pushToGitHub } from "@/lib/api";
 
 const TOKEN_SESSION_KEY = "clonyfy-github-token-session";
 
@@ -42,6 +42,7 @@ export function GitHubPushDialog({
     () => `Import Clonyfy clone${domain ? ` (${domain})` : ""}`,
   );
   const [busy, setBusy] = useState("");
+  const [hint, setHint] = useState("");
 
   const loadBranches = async () => {
     if (!token.trim() || !repo.trim()) {
@@ -49,7 +50,9 @@ export function GitHubPushDialog({
       return;
     }
     setBusy("branches");
+    setHint("");
     try {
+      await ensureApiAwake({ attempts: 4, timeoutMs: 12_000 }).catch(() => {});
       const data = await fetchGitHubBranches(token.trim(), repo.trim());
       setBranches(data.branches || []);
       if (data.branches?.length && !data.branches.includes(branch)) {
@@ -70,33 +73,43 @@ export function GitHubPushDialog({
       return;
     }
     if (!repo.trim()) {
-      toast.error("Enter a repository as owner/repo.");
+      toast.error("Enter a repository as owner/repo (example: yourname/clone).");
       return;
     }
     setBusy("push");
+    setHint("Checking GitHub repo, then uploading clone files…");
     try {
+      await ensureApiAwake({ attempts: 4, timeoutMs: 12_000 }).catch(() => {});
       const payload: {
         outDir: string;
         token: string;
         repo: string;
         branch: string;
         commitMessage?: string;
+        createRepo?: boolean;
       } = {
         outDir,
         token: token.trim(),
         repo: repo.trim(),
         branch: branch.trim() || "main",
+        createRepo: true,
       };
       const msg = commitMessage.trim();
       if (msg) payload.commitMessage = msg;
       const data = await pushToGitHub(payload);
       writeSessionToken(token.trim());
-      toast.success("Pushed to GitHub.");
+      toast.success(
+        data.createdRepo
+          ? "Created the GitHub repo and pushed the clone."
+          : "Pushed to GitHub.",
+      );
       const openUrl = data.commitUrl || data.repoUrl || data.url;
       if (openUrl) window.open(openUrl, "_blank", "noopener,noreferrer");
       onOpenChange(false);
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : "GitHub push failed.");
+      const message = err instanceof ApiError ? err.message : "GitHub push failed.";
+      toast.error(message);
+      setHint(message);
     } finally {
       setBusy("");
     }
@@ -110,8 +123,9 @@ export function GitHubPushDialog({
           Push to GitHub
         </DialogTitle>
         <DialogDescription>
-          Pushes the regenerated Next.js project for this clone. Requires a paid plan and a PAT with
-          repo scope. Token is kept in this browser tab only.
+          Pushes captured clone files to GitHub. Needs a paid plan and a PAT with{" "}
+          <strong>repo</strong> scope. If <code>owner/repo</code> does not exist under your user, we
+          try to create it. Token stays in this browser tab only.
         </DialogDescription>
         <div className="mt-4 space-y-3">
           <label className="block text-sm">
@@ -167,6 +181,7 @@ export function GitHubPushDialog({
               className="mt-2 w-full rounded-xl border border-border bg-background p-3"
             />
           </label>
+          {hint ? <p className="text-xs text-muted-foreground">{hint}</p> : null}
           <button
             type="button"
             className="dashboard-button w-full bg-primary text-primary-foreground"

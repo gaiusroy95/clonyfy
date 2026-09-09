@@ -774,16 +774,20 @@ export async function pushToGitHub(input: {
   repo: string;
   branch?: string;
   commitMessage?: string;
+  createRepo?: boolean;
 }) {
+  await ensureApiAwake({ attempts: 4, timeoutMs: 12_000 }).catch(() => {});
   return apiFetch<{
     ok: boolean;
     url?: string;
     commitUrl?: string;
     repoUrl?: string;
+    createdRepo?: boolean;
+    files?: number;
   }>("/api/github/push", {
     method: "POST",
     body: input,
-    timeoutMs: 180_000,
+    timeoutMs: 240_000,
   });
 }
 
