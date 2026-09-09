@@ -502,28 +502,71 @@ export function downloadFigmaZipUrl(outDir: string) {
   return `${getApiBaseUrl()}/api/download-figma-zip?${params.toString()}`;
 }
 
-async function downloadAuthedBlob(url: string, fallbackName: string): Promise<{ blob: Blob; filename: string }> {
+async function downloadAuthedBlob(
+  url: string,
+  fallbackName: string,
+  options?: { timeoutMs?: number },
+): Promise<{ blob: Blob; filename: string }> {
+  const timeoutMs = options?.timeoutMs ?? 120_000;
+  await ensureApiAwake({ attempts: 4, timeoutMs: 12_000 }).catch(() => {});
   const token = getAuthToken();
-  const res = await fetch(url, {
-    headers: token ? { "X-Auth-Token": token } : {},
-  });
-  const contentType = String(res.headers.get("content-type") || "");
-  if (contentType.includes("application/json")) {
-    const data = (await res.json()) as { error?: string };
-    throw new ApiError(data.error || `HTTP ${res.status}`, res.status, data);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, {
+      headers: token ? { "X-Auth-Token": token } : {},
+      signal: controller.signal,
+      credentials: "omit",
+      cache: "no-store",
+    });
+    const contentType = String(res.headers.get("content-type") || "");
+    if (contentType.includes("application/json")) {
+      const data = (await res.json()) as { error?: string };
+      throw new ApiError(data.error || `HTTP ${res.status}`, res.status, data);
+    }
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      let message = `HTTP ${res.status}`;
+      try {
+        const parsed = text ? (JSON.parse(text) as { error?: string }) : null;
+        if (parsed?.error) message = parsed.error;
+      } catch {
+        if (/timed out|timeout|gateway|502|503|504/i.test(text) || res.status === 502 || res.status === 503 || res.status === 504) {
+          message = "Figma export timed out or the Backend restarted. Try Export for Figma Desktop, or retry once.";
+        }
+      }
+      throw new ApiError(message, res.status);
+    }
+    const disposition = res.headers.get("content-disposition") || "";
+    const match = disposition.match(/filename="?([^"]+)"?/i);
+    return { blob: await res.blob(), filename: match?.[1] || fallbackName };
+  } catch (err) {
+    if (err instanceof ApiError) throw err;
+    if (err instanceof DOMException && err.name === "AbortError") {
+      throw new ApiError(
+        "Figma export took too long. Try Export for Figma Desktop, or a smaller page.",
+        504,
+      );
+    }
+    if (isTransientNetworkError(err)) {
+      throw new ApiError(
+        "Could not reach the Backend for Figma export. Wait for wake-up and try again.",
+        503,
+        { cause: String(err) },
+      );
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
   }
-  if (!res.ok) throw new ApiError(`HTTP ${res.status}`, res.status);
-  const disposition = res.headers.get("content-disposition") || "";
-  const match = disposition.match(/filename="?([^"]+)"?/i);
-  return { blob: await res.blob(), filename: match?.[1] || fallbackName };
 }
 
 export async function downloadFigmaSvgBlob(outDir: string, route = "/") {
-  return downloadAuthedBlob(downloadFigmaSvgUrl(outDir, route), "page.svg");
+  return downloadAuthedBlob(downloadFigmaSvgUrl(outDir, route), "page.svg", { timeoutMs: 110_000 });
 }
 
 export async function downloadFigmaZipBlob(outDir: string) {
-  return downloadAuthedBlob(downloadFigmaZipUrl(outDir), "clone-figma.zip");
+  return downloadAuthedBlob(downloadFigmaZipUrl(outDir), "clone-figma.zip", { timeoutMs: 180_000 });
 }
 
 export type FigmaScene = {
@@ -548,63 +591,113 @@ export async function fetchFigmaScene(outDir: string, route = "/"): Promise<{
   scene: FigmaScene;
   warning?: string;
 }> {
+  await ensureApiAwake({ attempts: 4, timeoutMs: 12_000 }).catch(() => {});
   const token = getAuthToken();
   const params = new URLSearchParams({ outDir, route });
-  const res = await fetch(`${getApiBaseUrl()}/api/figma/scene?${params.toString()}`, {
-    headers: token ? { "X-Auth-Token": token } : {},
-  });
-  const contentType = String(res.headers.get("content-type") || "");
-  const data = (contentType.includes("application/json")
-    ? await res.json()
-    : null) as {
-    error?: string;
-    ok?: boolean;
-    scene?: FigmaScene;
-    warning?: string;
-    kind?: string;
-    downloadUrl?: string;
-    mode?: string;
-    parts?: Array<{ url: string; index: number }>;
-  } | null;
-  if (!res.ok || !data || data.error) {
-    throw new ApiError(data?.error || `HTTP ${res.status}`, res.status, data);
-  }
-  if (data.scene) return { scene: data.scene, ...(data.warning ? { warning: data.warning } : {}) };
-
-  // Large scenes are delivered via signed Storage (same pattern as ZIP exports).
-  if (data.kind === "figma-scene-ref" || data.downloadUrl || data.mode === "parts") {
-    let text = "";
-    if (data.mode === "parts" && Array.isArray(data.parts)) {
-      const ordered = data.parts.slice().sort((a, b) => (a.index || 0) - (b.index || 0));
-      const chunks: string[] = [];
-      for (const part of ordered) {
-        const partRes = await fetch(part.url);
-        if (!partRes.ok) throw new ApiError(`Could not download scene part ${part.index + 1}`, partRes.status);
-        chunks.push(await partRes.text());
-      }
-      text = chunks.join("");
-    } else if (data.downloadUrl) {
-      const fileRes = await fetch(data.downloadUrl);
-      if (!fileRes.ok) throw new ApiError("Could not download Figma scene", fileRes.status);
-      text = await fileRes.text();
-    } else {
-      throw new ApiError("Figma scene reference was incomplete", 500, data);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 110_000);
+  try {
+    const res = await fetch(`${getApiBaseUrl()}/api/figma/scene?${params.toString()}`, {
+      headers: token ? { "X-Auth-Token": token } : {},
+      signal: controller.signal,
+      credentials: "omit",
+      cache: "no-store",
+    });
+    const contentType = String(res.headers.get("content-type") || "");
+    const data = (contentType.includes("application/json")
+      ? await res.json()
+      : null) as {
+      error?: string;
+      ok?: boolean;
+      scene?: FigmaScene;
+      warning?: string;
+      kind?: string;
+      downloadUrl?: string;
+      mode?: string;
+      parts?: Array<{ url: string; index: number }>;
+    } | null;
+    if (!res.ok || !data || data.error) {
+      throw new ApiError(
+        data?.error ||
+          (res.status === 502 || res.status === 503 || res.status === 504
+            ? "Figma Desktop export timed out or the Backend restarted. Try again."
+            : `HTTP ${res.status}`),
+        res.status,
+        data,
+      );
     }
-    const parsed = JSON.parse(text) as { scene?: FigmaScene; ok?: boolean; warning?: string };
-    if (!parsed.scene) throw new ApiError("Downloaded Figma scene was empty", 500, parsed);
-    return {
-      scene: parsed.scene,
-      ...(parsed.warning || data.warning ? { warning: parsed.warning || data.warning } : {}),
-    };
-  }
+    if (data.scene) return { scene: data.scene, ...(data.warning ? { warning: data.warning } : {}) };
 
-  throw new ApiError("Figma scene export did not return a scene", 500, data);
+    // Large scenes are delivered via signed Storage (same pattern as ZIP exports).
+    if (data.kind === "figma-scene-ref" || data.downloadUrl || data.mode === "parts") {
+      let text = "";
+      if (data.mode === "parts" && Array.isArray(data.parts)) {
+        const ordered = data.parts.slice().sort((a, b) => (a.index || 0) - (b.index || 0));
+        const chunks: string[] = [];
+        for (const part of ordered) {
+          const partRes = await fetch(part.url);
+          if (!partRes.ok) throw new ApiError(`Could not download scene part ${part.index + 1}`, partRes.status);
+          chunks.push(await partRes.text());
+        }
+        text = chunks.join("");
+      } else if (data.downloadUrl) {
+        const fileRes = await fetch(data.downloadUrl);
+        if (!fileRes.ok) throw new ApiError("Could not download Figma scene", fileRes.status);
+        text = await fileRes.text();
+      } else {
+        throw new ApiError("Figma scene reference was incomplete", 500, data);
+      }
+      const parsed = JSON.parse(text) as { scene?: FigmaScene; ok?: boolean; warning?: string };
+      if (!parsed.scene) throw new ApiError("Downloaded Figma scene was empty", 500, parsed);
+      return {
+        scene: parsed.scene,
+        ...(parsed.warning || data.warning ? { warning: parsed.warning || data.warning } : {}),
+      };
+    }
+
+    throw new ApiError("Figma scene export did not return a scene", 500, data);
+  } catch (err) {
+    if (err instanceof ApiError) throw err;
+    if (err instanceof DOMException && err.name === "AbortError") {
+      throw new ApiError(
+        "Figma Desktop scene took too long. Try Download SVG for Figma Web, or retry once.",
+        504,
+      );
+    }
+    if (isTransientNetworkError(err)) {
+      throw new ApiError(
+        "Could not reach the Backend for Figma Desktop export. Wait for wake-up and try again.",
+        503,
+        { cause: String(err) },
+      );
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
-export async function copyFigmaSceneToClipboard(scene: FigmaScene) {
-  const text = JSON.stringify(scene);
+/** Clipboard soft limit — browsers / OS often fail silently above ~1–2MB. */
+const FIGMA_CLIPBOARD_SOFT_MAX = 1_400_000;
+
+export async function copyFigmaSceneToClipboard(scene: FigmaScene): Promise<{
+  bytes: number;
+  usedClipboard: boolean;
+}> {
+  const payload: FigmaScene = {
+    ...scene,
+    kind: "clonyfy-figma-scene",
+    version: 1,
+  };
+  const text = JSON.stringify(payload);
+  if (text.length > FIGMA_CLIPBOARD_SOFT_MAX) {
+    throw new Error("SCENE_TOO_LARGE_FOR_CLIPBOARD");
+  }
+  if (!navigator.clipboard?.writeText) {
+    throw new Error("CLIPBOARD_UNAVAILABLE");
+  }
   await navigator.clipboard.writeText(text);
-  return text.length;
+  return { bytes: text.length, usedClipboard: true };
 }
 
 export async function fetchGitHubBranches(token: string, repo: string) {

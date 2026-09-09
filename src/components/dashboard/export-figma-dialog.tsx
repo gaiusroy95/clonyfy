@@ -11,12 +11,16 @@ import {
   fetchFigmaScene,
   fetchPublicConfig,
   triggerBrowserDownload,
+  type FigmaScene,
 } from "@/lib/api";
 
 /**
  * Original Clonyfy Figma export modal:
- * - Desktop: Scene Graph → clipboard → Clonyfy Import plugin
+ * - Desktop: Backend builds Scene Graph → clipboard → user runs Clonyfy Import in Figma Desktop
  * - Web: Download SVG → drag onto Figma canvas
+ *
+ * Note: "Export for Figma Desktop" is NOT a local clipboard-only action — the Backend must
+ * render the page with Playwright first (same class of work as SVG export).
  */
 export function ExportFigmaDialog({
   open,
@@ -64,35 +68,58 @@ export function ExportFigmaDialog({
     if (err instanceof ApiError && err.status === 403) {
       return err.message || "Figma export requires a paid plan. Upgrade in Subscription.";
     }
-    return err instanceof ApiError ? err.message : "Figma export failed.";
+    if (err instanceof ApiError && err.message) return err.message;
+    return "Figma export failed.";
+  };
+
+  const sceneFileName = () =>
+    `${(domain || "clone").replace(/[^\w.-]+/g, "_")}-figma-scene.json`;
+
+  const deliverScene = async (scene: FigmaScene, warning?: string) => {
+    try {
+      await copyFigmaSceneToClipboard(scene);
+      setHint(
+        "Scene copied. Next: open Figma Desktop → Plugins → Clonyfy Import (auto-imports from clipboard). We cannot open the plugin for you.",
+      );
+      toast.success("Scene copied. Run Clonyfy Import in Figma Desktop.");
+      if (warning) toast.message(warning);
+    } catch (clipErr) {
+      const reason = clipErr instanceof Error ? clipErr.message : "";
+      const blob = new Blob([JSON.stringify({ ...scene, kind: "clonyfy-figma-scene", version: 1 }, null, 2)], {
+        type: "application/json",
+      });
+      triggerBrowserDownload(blob, sceneFileName());
+      if (reason === "SCENE_TOO_LARGE_FOR_CLIPBOARD") {
+        setHint(
+          "Scene was too large for the clipboard. JSON downloaded — in Figma Desktop open Clonyfy Import and paste or use Import.",
+        );
+        toast.message("Scene JSON downloaded (too large for clipboard).");
+      } else {
+        setHint(
+          "Clipboard was blocked. JSON downloaded — paste it into Clonyfy Import in Figma Desktop.",
+        );
+        toast.message("Clipboard blocked — scene JSON downloaded instead.");
+      }
+      if (warning) toast.message(warning);
+    }
   };
 
   const exportDesktop = async () => {
     setBusy("desktop");
-    setHint("");
+    setHint("Building Scene Graph on the Backend (can take up to ~1 minute on free hosts)…");
     try {
       const { scene, warning } = await fetchFigmaScene(outDir, route);
-      try {
-        await copyFigmaSceneToClipboard(scene);
-        setHint(
-          "Scene Graph copied. In Figma Desktop: Plugins → Clonyfy Import (or Run last plugin).",
-        );
-        toast.success("Copied for Figma Desktop. Open Clonyfy Import in Figma.");
-        if (warning) toast.message(warning);
-      } catch {
-        // Clipboard may be blocked — fall back to downloading JSON the plugin can paste.
-        const blob = new Blob([JSON.stringify(scene, null, 2)], { type: "application/json" });
-        triggerBrowserDownload(
-          blob,
-          `${(domain || "clone").replace(/[^\w.-]+/g, "_")}-figma-scene.json`,
-        );
-        setHint(
-          "Clipboard was blocked. JSON downloaded — paste it into Clonyfy Import in Figma.",
-        );
-        toast.message("Clipboard blocked — scene JSON downloaded instead.");
+      if (!scene?.nodes || !Array.isArray(scene.nodes) || scene.nodes.length === 0) {
+        throw new ApiError("Empty scene — nothing to import. Re-run the clone or try another page.", 422);
       }
+      await deliverScene(scene, warning);
     } catch (err) {
       toast.error(paidGate(err));
+      setHint(
+        err instanceof ApiError
+          ? err.message
+          : "Desktop export failed while building the scene on the Backend.",
+      );
     } finally {
       setBusy("");
     }
@@ -136,8 +163,8 @@ export function ExportFigmaDialog({
           Export to Figma
         </DialogTitle>
         <DialogDescription>
-          Same flow as the original Clonyfy product: editable layers via the Desktop plugin, or SVG
-          for Figma Web.
+          Desktop import needs two steps: Clonyfy builds a Scene Graph on the Backend, then you run
+          the <strong>Clonyfy Import</strong> plugin in Figma Desktop (clipboard alone is not enough).
         </DialogDescription>
 
         <label className="mt-4 block text-sm">
@@ -156,6 +183,12 @@ export function ExportFigmaDialog({
           </select>
         </label>
 
+        <ol className="mt-4 list-decimal space-y-1 pl-5 text-xs leading-relaxed text-muted-foreground">
+          <li>Install <strong>Clonyfy Import</strong> (Community link below, or Development → Import plugin).</li>
+          <li>Click <strong>Export for Figma Desktop</strong> and wait until it says copied / downloaded.</li>
+          <li>In <strong>Figma Desktop</strong>: Plugins → Clonyfy Import (or Run last plugin).</li>
+        </ol>
+
         <div className="mt-5 space-y-3">
           <button
             type="button"
@@ -164,11 +197,11 @@ export function ExportFigmaDialog({
             onClick={() => void exportDesktop()}
           >
             <Monitor size={16} />
-            {busy === "desktop" ? "Building scene…" : "Export for Figma Desktop"}
+            {busy === "desktop" ? "Building scene on Backend…" : "Export for Figma Desktop"}
           </button>
           <p className="text-xs leading-relaxed text-muted-foreground">
-            Copies Scene Graph JSON to the clipboard. Then open{" "}
-            <strong>Plugins → Clonyfy Import</strong> in Figma Desktop (auto-imports from clipboard).
+            Builds editable layers, then copies JSON for the Clonyfy Import plugin. This does not open
+            Figma by itself.
           </p>
 
           <button
@@ -182,7 +215,7 @@ export function ExportFigmaDialog({
           </button>
           <p className="text-xs leading-relaxed text-muted-foreground">
             Download an SVG and drag it onto the Figma canvas (works in Figma Web without the
-            plugin).
+            plugin). Large sites may take up to ~1 minute on free hosts.
           </p>
 
           <button
@@ -196,28 +229,22 @@ export function ExportFigmaDialog({
           </button>
         </div>
 
+        {hint ? <p className="mt-4 text-sm text-muted-foreground">{hint}</p> : null}
+
         {pluginUrl ? (
           <a
-            className="dashboard-button mt-4 inline-flex w-full justify-center"
+            className="dashboard-button mt-4 w-full justify-start"
             href={pluginUrl}
             target="_blank"
             rel="noreferrer"
           >
-            Install Clonyfy Import
             <ExternalLink size={16} />
+            Install Clonyfy Import
           </a>
         ) : (
           <p className="mt-4 text-xs text-muted-foreground">
-            Plugin install link appears here when{" "}
-            <code className="text-[11px]">FIGMA_COMMUNITY_PLUGIN_URL</code> is set on the Backend.
-            Until then, import the Development plugin from{" "}
-            <code className="text-[11px]">Backend/figma-plugin</code>.
-          </p>
-        )}
-
-        {hint && (
-          <p className="mt-4 rounded-xl border border-border bg-background p-3 text-xs leading-relaxed" role="status">
-            {hint}
+            Developers: Figma Desktop → Plugins → Development → Import plugin from{" "}
+            <code>Backend/figma-plugin/manifest.json</code>.
           </p>
         )}
       </DialogContent>

@@ -266,7 +266,7 @@ export function CaptureDetails({
                       try {
                         const doc = event.currentTarget.contentDocument;
                         const text = doc?.body?.innerText || "";
-                        if (/no clone loaded|not authenticated|not found/i.test(text)) {
+                        if (/no clone loaded|not authenticated|not found|internal server error|missing from disk/i.test(text)) {
                           setIframeError(true);
                         }
                       } catch {
@@ -281,7 +281,7 @@ export function CaptureDetails({
                 {job.status === "running"
                   ? "Clone is still running. Preview and export unlock when it finishes."
                   : job.status === "error"
-                    ? "This capture failed. Start a new clone to get a previewable output."
+                    ? "This capture failed or its files are missing from storage. Start a new clone to get a previewable output."
                     : "Preview and export will appear once this capture has an output folder."}
               </p>
             )}
