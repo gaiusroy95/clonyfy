@@ -14,6 +14,8 @@ import {
   logoutRequest,
   registerRequest,
   setAuthToken,
+  ensureApiAwake,
+  startApiKeepWarm,
   type AuthUser,
   type UsageSummary,
 } from "@/lib/api";
@@ -57,8 +59,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let cancelled = false;
+    const stopWarm = startApiKeepWarm();
     (async () => {
       try {
+        await ensureApiAwake({ attempts: 4, timeoutMs: 10_000 }).catch(() => {});
         if (!getAuthToken()) return;
         await refresh();
       } catch {
@@ -73,6 +77,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     })();
     return () => {
       cancelled = true;
+      stopWarm();
     };
   }, [refresh]);
 

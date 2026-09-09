@@ -16,6 +16,9 @@ export class ApiError extends Error {
 }
 
 const TOKEN_KEY = "clonyfy_auth_token";
+const WAKE_COOLDOWN_MS = 90_000;
+let lastWakeOkAt = 0;
+let wakeInFlight: Promise<boolean> | null = null;
 
 export function getAuthToken(): string | null {
   if (typeof window === "undefined") return null;
@@ -36,14 +39,126 @@ export function setAuthToken(token: string | null) {
   }
 }
 
+function isRemoteApiHost(): boolean {
+  try {
+    const host = new URL(getApiBaseUrl()).hostname;
+    return host !== "localhost" && host !== "127.0.0.1";
+  } catch {
+    return false;
+  }
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isTransientNetworkError(err: unknown): boolean {
+  if (!err) return false;
+  if (err instanceof ApiError) return err.status === 502 || err.status === 503 || err.status === 504;
+  const name = err instanceof Error ? err.name : "";
+  const msg = String(err instanceof Error ? err.message : err).toLowerCase();
+  return (
+    name === "AbortError" ||
+    msg.includes("failed to fetch") ||
+    msg.includes("networkerror") ||
+    msg.includes("network request failed") ||
+    msg.includes("load failed") ||
+    msg.includes("aborted")
+  );
+}
+
+function wakeUpMessage() {
+  return "The Backend is waking up (common on Render free tier). Wait a moment and try again — usually 30–90 seconds.";
+}
+
+/**
+ * Ping /api/health until the Backend answers. Mitigates Render free-tier cold starts.
+ * Safe to call often — cached for ~90s after a successful wake.
+ */
+export async function ensureApiAwake(options?: {
+  attempts?: number;
+  timeoutMs?: number;
+  force?: boolean;
+}): Promise<boolean> {
+  if (!isRemoteApiHost()) {
+    lastWakeOkAt = Date.now();
+    return true;
+  }
+  const attempts = options?.attempts ?? 8;
+  const timeoutMs = options?.timeoutMs ?? 12_000;
+  if (!options?.force && Date.now() - lastWakeOkAt < WAKE_COOLDOWN_MS) return true;
+  if (wakeInFlight) return wakeInFlight;
+
+  wakeInFlight = (async () => {
+    let lastErr: unknown = null;
+    for (let i = 0; i < attempts; i++) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const res = await fetch(`${getApiBaseUrl()}/api/health`, {
+          signal: controller.signal,
+          credentials: "omit",
+          cache: "no-store",
+        });
+        if (res.ok) {
+          lastWakeOkAt = Date.now();
+          return true;
+        }
+        lastErr = new ApiError(`HTTP ${res.status}`, res.status);
+      } catch (err) {
+        lastErr = err;
+      } finally {
+        clearTimeout(timer);
+      }
+      // Back off while Render spins up Chromium / Node.
+      await sleep(Math.min(2500 + i * 1500, 8000));
+    }
+    if (lastErr instanceof ApiError) throw lastErr;
+    throw new ApiError(wakeUpMessage(), 503, { cause: String(lastErr) });
+  })().finally(() => {
+    wakeInFlight = null;
+  });
+
+  return wakeInFlight;
+}
+
+/** Lightweight keep-alive while the dashboard is open (reduces free-tier sleep). */
+export function startApiKeepWarm(intervalMs = 8 * 60 * 1000): () => void {
+  if (typeof window === "undefined" || !isRemoteApiHost()) return () => {};
+  void ensureApiAwake({ attempts: 3, timeoutMs: 15_000 }).catch(() => {});
+  const id = window.setInterval(() => {
+    void ensureApiAwake({ attempts: 2, timeoutMs: 10_000, force: true }).catch(() => {});
+  }, intervalMs);
+  return () => window.clearInterval(id);
+}
+
 type ApiFetchOptions = Omit<RequestInit, "body"> & {
   body?: unknown;
   auth?: boolean;
   timeoutMs?: number;
+  retries?: number;
+  skipWake?: boolean;
 };
 
 export async function apiFetch<T = unknown>(path: string, options: ApiFetchOptions = {}): Promise<T> {
-  const { body, auth = true, timeoutMs = 60_000, headers: initHeaders, ...rest } = options;
+  const {
+    body,
+    auth = true,
+    timeoutMs = 60_000,
+    retries = isRemoteApiHost() ? 2 : 0,
+    skipWake = false,
+    headers: initHeaders,
+    ...rest
+  } = options;
+
+  if (!skipWake && isRemoteApiHost()) {
+    try {
+      await ensureApiAwake({ attempts: 6, timeoutMs: 12_000 });
+    } catch {
+      // Still attempt the real request — health may be blocked while app routes work.
+    }
+  }
+
   const headers = new Headers(initHeaders || {});
   if (body !== undefined && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
@@ -53,36 +168,62 @@ export async function apiFetch<T = unknown>(path: string, options: ApiFetchOptio
     if (token) headers.set("X-Auth-Token", token);
   }
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const init: RequestInit = {
-      ...rest,
-      headers,
-      signal: rest.signal || controller.signal,
-      credentials: "omit",
-    };
-    if (body !== undefined) init.body = JSON.stringify(body);
-    const res = await fetch(`${getApiBaseUrl()}${path.startsWith("/") ? path : `/${path}`}`, init);
-    const text = await res.text();
-    let data: unknown = null;
-    if (text) {
-      try {
-        data = JSON.parse(text);
-      } catch {
-        data = text;
+  let attempt = 0;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const init: RequestInit = {
+        ...rest,
+        headers,
+        signal: rest.signal || controller.signal,
+        credentials: "omit",
+      };
+      if (body !== undefined) init.body = JSON.stringify(body);
+      const res = await fetch(`${getApiBaseUrl()}${path.startsWith("/") ? path : `/${path}`}`, init);
+      const text = await res.text();
+      let data: unknown = null;
+      if (text) {
+        try {
+          data = JSON.parse(text);
+        } catch {
+          data = text;
+        }
       }
+      if (!res.ok) {
+        const message =
+          data && typeof data === "object" && data !== null && "error" in data
+            ? String((data as { error: unknown }).error || `HTTP ${res.status}`)
+            : res.status === 502 || res.status === 503 || res.status === 504
+              ? wakeUpMessage()
+              : `HTTP ${res.status}`;
+        const err = new ApiError(message, res.status, data);
+        if (attempt < retries && (res.status === 502 || res.status === 503 || res.status === 504)) {
+          attempt++;
+          await sleep(1500 * attempt);
+          await ensureApiAwake({ attempts: 4, timeoutMs: 12_000, force: true }).catch(() => {});
+          continue;
+        }
+        throw err;
+      }
+      lastWakeOkAt = Date.now();
+      return data as T;
+    } catch (err) {
+      if (err instanceof ApiError) throw err;
+      if (attempt < retries && isTransientNetworkError(err)) {
+        attempt++;
+        await sleep(1500 * attempt);
+        await ensureApiAwake({ attempts: 4, timeoutMs: 12_000, force: true }).catch(() => {});
+        continue;
+      }
+      if (isTransientNetworkError(err)) {
+        throw new ApiError(wakeUpMessage(), 503, { cause: String(err) });
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
     }
-    if (!res.ok) {
-      const message =
-        data && typeof data === "object" && data !== null && "error" in data
-          ? String((data as { error: unknown }).error || `HTTP ${res.status}`)
-          : `HTTP ${res.status}`;
-      throw new ApiError(message, res.status, data);
-    }
-    return data as T;
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -131,20 +272,24 @@ export type AuthSession = {
 };
 
 export async function loginRequest(email: string, password: string, remember = true) {
+  await ensureApiAwake({ attempts: 10, timeoutMs: 15_000 }).catch(() => {});
   return apiFetch<AuthSession>("/api/auth/login", {
     method: "POST",
     auth: false,
     body: { email, password, remember },
     timeoutMs: 120_000,
+    retries: 3,
   });
 }
 
 export async function registerRequest(name: string, email: string, password: string) {
+  await ensureApiAwake({ attempts: 10, timeoutMs: 15_000 }).catch(() => {});
   return apiFetch<AuthSession>("/api/auth/register", {
     method: "POST",
     auth: false,
     body: { name, email, password },
     timeoutMs: 120_000,
+    retries: 3,
   });
 }
 
@@ -202,6 +347,7 @@ export async function startClone(input: {
   depth: number;
   ignoreRobots?: boolean;
 }) {
+  await ensureApiAwake({ attempts: 8, timeoutMs: 12_000 }).catch(() => {});
   return apiFetch<CloneJobResponse>("/api/clone", {
     method: "POST",
     body: {
@@ -211,6 +357,7 @@ export async function startClone(input: {
       ignoreRobots: !!input.ignoreRobots,
     },
     timeoutMs: 120_000,
+    retries: 2,
   });
 }
 
@@ -377,6 +524,87 @@ export async function downloadFigmaSvgBlob(outDir: string, route = "/") {
 
 export async function downloadFigmaZipBlob(outDir: string) {
   return downloadAuthedBlob(downloadFigmaZipUrl(outDir), "clone-figma.zip");
+}
+
+export type FigmaScene = {
+  kind?: string;
+  version?: number;
+  name?: string;
+  route?: string;
+  page?: Record<string, unknown>;
+  nodes?: unknown[];
+  [key: string]: unknown;
+};
+
+export async function fetchPublicConfig() {
+  return apiFetch<{
+    figma_community_plugin_url?: string;
+    affiliate_enabled?: boolean;
+  }>("/api/public-config", { auth: false });
+}
+
+/** Resolve Scene Graph for Figma Desktop plugin (clipboard import). */
+export async function fetchFigmaScene(outDir: string, route = "/"): Promise<{
+  scene: FigmaScene;
+  warning?: string;
+}> {
+  const token = getAuthToken();
+  const params = new URLSearchParams({ outDir, route });
+  const res = await fetch(`${getApiBaseUrl()}/api/figma/scene?${params.toString()}`, {
+    headers: token ? { "X-Auth-Token": token } : {},
+  });
+  const contentType = String(res.headers.get("content-type") || "");
+  const data = (contentType.includes("application/json")
+    ? await res.json()
+    : null) as {
+    error?: string;
+    ok?: boolean;
+    scene?: FigmaScene;
+    warning?: string;
+    kind?: string;
+    downloadUrl?: string;
+    mode?: string;
+    parts?: Array<{ url: string; index: number }>;
+  } | null;
+  if (!res.ok || !data || data.error) {
+    throw new ApiError(data?.error || `HTTP ${res.status}`, res.status, data);
+  }
+  if (data.scene) return { scene: data.scene, ...(data.warning ? { warning: data.warning } : {}) };
+
+  // Large scenes are delivered via signed Storage (same pattern as ZIP exports).
+  if (data.kind === "figma-scene-ref" || data.downloadUrl || data.mode === "parts") {
+    let text = "";
+    if (data.mode === "parts" && Array.isArray(data.parts)) {
+      const ordered = data.parts.slice().sort((a, b) => (a.index || 0) - (b.index || 0));
+      const chunks: string[] = [];
+      for (const part of ordered) {
+        const partRes = await fetch(part.url);
+        if (!partRes.ok) throw new ApiError(`Could not download scene part ${part.index + 1}`, partRes.status);
+        chunks.push(await partRes.text());
+      }
+      text = chunks.join("");
+    } else if (data.downloadUrl) {
+      const fileRes = await fetch(data.downloadUrl);
+      if (!fileRes.ok) throw new ApiError("Could not download Figma scene", fileRes.status);
+      text = await fileRes.text();
+    } else {
+      throw new ApiError("Figma scene reference was incomplete", 500, data);
+    }
+    const parsed = JSON.parse(text) as { scene?: FigmaScene; ok?: boolean; warning?: string };
+    if (!parsed.scene) throw new ApiError("Downloaded Figma scene was empty", 500, parsed);
+    return {
+      scene: parsed.scene,
+      ...(parsed.warning || data.warning ? { warning: parsed.warning || data.warning } : {}),
+    };
+  }
+
+  throw new ApiError("Figma scene export did not return a scene", 500, data);
+}
+
+export async function copyFigmaSceneToClipboard(scene: FigmaScene) {
+  const text = JSON.stringify(scene);
+  await navigator.clipboard.writeText(text);
+  return text.length;
 }
 
 export async function fetchGitHubBranches(token: string, repo: string) {

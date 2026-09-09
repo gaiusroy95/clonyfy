@@ -14,13 +14,12 @@ import {
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import type { CloneJob, CloneStatus } from "./data";
+import { ExportFigmaDialog } from "./export-figma-dialog";
 import { GitHubPushDialog } from "./github-push-dialog";
 import {
   ApiError,
   createShareLink,
   deleteOutput,
-  downloadFigmaSvgBlob,
-  downloadFigmaZipBlob,
   downloadZipBlob,
   getApiBaseUrl,
   pagePreviewUrl,
@@ -118,6 +117,7 @@ export function CaptureDetails({
   const [busy, setBusy] = useState("");
   const [iframeError, setIframeError] = useState(false);
   const [githubOpen, setGithubOpen] = useState(false);
+  const [figmaOpen, setFigmaOpen] = useState(false);
   const canPreview = !!job?.outDir && job.status === "done";
   const previewSrc = canPreview && job?.outDir ? pagePreviewUrl(job.outDir) : "";
 
@@ -161,40 +161,6 @@ export function CaptureDetails({
       toast.success("ZIP downloaded.");
     } catch (err) {
       toast.error(paidGateMessage(err, "ZIP export"));
-    } finally {
-      setBusy("");
-    }
-  };
-
-  const downloadFigmaSvg = async () => {
-    if (!job?.outDir) {
-      toast.error("Figma export is available after the clone finishes.");
-      return;
-    }
-    setBusy("figma-svg");
-    try {
-      const { blob, filename } = await downloadFigmaSvgBlob(job.outDir, "/");
-      triggerBrowserDownload(blob, filename);
-      toast.success("Figma SVG downloaded.");
-    } catch (err) {
-      toast.error(paidGateMessage(err, "Figma export"));
-    } finally {
-      setBusy("");
-    }
-  };
-
-  const downloadFigmaZip = async () => {
-    if (!job?.outDir) {
-      toast.error("Figma export is available after the clone finishes.");
-      return;
-    }
-    setBusy("figma-zip");
-    try {
-      const { blob, filename } = await downloadFigmaZipBlob(job.outDir);
-      triggerBrowserDownload(blob, filename);
-      toast.success("Figma ZIP downloaded.");
-    } catch (err) {
-      toast.error(paidGateMessage(err, "Figma export"));
     } finally {
       setBusy("");
     }
@@ -351,20 +317,11 @@ export function CaptureDetails({
               <button
                 type="button"
                 className="dashboard-button"
-                onClick={() => void downloadFigmaSvg()}
-                disabled={!job.outDir || busy === "figma-svg"}
+                onClick={() => setFigmaOpen(true)}
+                disabled={!job.outDir || job.status !== "done"}
               >
                 <Figma size={16} />
-                {busy === "figma-svg" ? "Exporting…" : "Figma SVG"}
-              </button>
-              <button
-                type="button"
-                className="dashboard-button"
-                onClick={() => void downloadFigmaZip()}
-                disabled={!job.outDir || busy === "figma-zip"}
-              >
-                <Figma size={16} />
-                {busy === "figma-zip" ? "Exporting…" : "Figma ZIP"}
+                Export to Figma
               </button>
               <button
                 type="button"
@@ -414,12 +371,20 @@ export function CaptureDetails({
         )}
       </DialogContent>
       {job?.outDir && (
-        <GitHubPushDialog
-          open={githubOpen}
-          onOpenChange={setGithubOpen}
-          outDir={job.outDir}
-          domain={job.domain}
-        />
+        <>
+          <GitHubPushDialog
+            open={githubOpen}
+            onOpenChange={setGithubOpen}
+            outDir={job.outDir}
+            domain={job.domain}
+          />
+          <ExportFigmaDialog
+            open={figmaOpen}
+            onOpenChange={setFigmaOpen}
+            outDir={job.outDir}
+            domain={job.domain}
+          />
+        </>
       )}
     </Dialog>
   );

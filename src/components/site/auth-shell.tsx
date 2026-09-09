@@ -1,6 +1,6 @@
 ﻿import { useSiteLanguage } from "@/hooks/use-site-language";
 import { useAuth } from "@/hooks/use-auth";
-import { ApiError, googleAuthUrl } from "@/lib/api";
+import { ApiError, ensureApiAwake, googleAuthUrl } from "@/lib/api";
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import {
@@ -60,7 +60,9 @@ export function AuthShell({
     const password = String(form.get("password") || "");
     const name = String(form.get("name") || "").trim();
     setBusy(true);
+    setError("");
     try {
+      await ensureApiAwake({ attempts: 10, timeoutMs: 15_000 }).catch(() => {});
       const attempt = async () => {
         if (mode === "login") await login(email, password);
         else await register(name, email, password);
@@ -68,13 +70,14 @@ export function AuthShell({
       try {
         await attempt();
       } catch (first) {
-        const network =
-          !(first instanceof ApiError) &&
-          (first instanceof TypeError ||
-            (first instanceof Error && /Failed to fetch|NetworkError|abort/i.test(first.message)));
-        if (!network) throw first;
-        // Render free tier often needs a cold start; retry once after a short wait.
-        await new Promise((r) => setTimeout(r, 2500));
+        const retryable =
+          (first instanceof ApiError && (first.status === 502 || first.status === 503 || first.status === 504)) ||
+          (!(first instanceof ApiError) &&
+            (first instanceof TypeError ||
+              (first instanceof Error && /Failed to fetch|NetworkError|abort|waking/i.test(first.message))));
+        if (!retryable) throw first;
+        await ensureApiAwake({ attempts: 8, timeoutMs: 15_000, force: true }).catch(() => {});
+        await new Promise((r) => setTimeout(r, 2000));
         await attempt();
       }
       await navigate({ to: "/dashboard" });
@@ -83,7 +86,7 @@ export function AuthShell({
         err instanceof ApiError
           ? err.message
           : err instanceof TypeError || (err instanceof Error && /Failed to fetch|NetworkError|abort/i.test(err.message))
-            ? tr("Cannot reach the API. The Backend may be waking up (Render free tier) — wait ~30s and try again. Also use https://www.clonyfy.com.")
+            ? tr("Cannot reach the API. The Backend may be waking up (Render free tier) — wait ~30–90s and try again. Prefer https://www.clonyfy.com.")
             : mode === "login"
               ? tr("Could not log in. Check your email and password.")
               : tr("Could not create your account. Please try again.");

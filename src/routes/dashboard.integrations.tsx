@@ -129,13 +129,31 @@ function IntegrationsPage() {
           )}
         </section>
 
+        <section className="integration-card surface rounded-3xl p-6">
+          <div className="flex items-center gap-4">
+            <span className="grid h-12 w-12 place-items-center rounded-2xl border border-border">
+              <Figma size={24} strokeWidth={1.5} />
+            </span>
+            <div>
+              <h2 className="font-display text-xl">Figma</h2>
+              <p className="mt-1 text-[10px] uppercase tracking-widest text-muted-foreground">
+                FG · Desktop plugin + Web SVG
+              </p>
+            </div>
+            <Check size={16} className="ml-auto" />
+          </div>
+          <p className="mt-5 text-sm leading-relaxed text-muted-foreground">
+            From a finished clone open Export to Figma: Desktop copies Scene Graph for Clonyfy
+            Import, or download SVG for Figma Web.
+          </p>
+          <div className="mt-6 flex flex-wrap gap-2">
+            <Link to="/dashboard/library" className="dashboard-button bg-primary text-primary-foreground">
+              Open library to export
+            </Link>
+          </div>
+        </section>
+
         {[
-          {
-            name: "Figma",
-            short: "FG",
-            icon: Figma,
-            description: "Design handoff from captured pages. Use ZIP + SVG exports today.",
-          },
           {
             name: "Slack",
             short: "SL",
@@ -171,7 +189,8 @@ function IntegrationsPage() {
         ))}
       </div>
       <p className="surface rounded-2xl p-5 text-sm text-muted-foreground" role="status">
-        {notice || "Connect GitHub when you are ready. Push from a finished capture (Library → capture → Push to GitHub)."}
+        {notice ||
+          "GitHub push and Figma export are available from finished captures in Library."}
       </p>
     </div>
   );

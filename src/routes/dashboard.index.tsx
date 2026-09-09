@@ -12,13 +12,12 @@ import {
 } from "lucide-react";
 import { CapturePipeline } from "@/components/dashboard/pipeline";
 import { ScanningBrowser } from "@/components/dashboard/demo-preview";
+import { ExportFigmaDialog } from "@/components/dashboard/export-figma-dialog";
 import { GitHubPushDialog } from "@/components/dashboard/github-push-dialog";
 import { useDashboardWorkspace } from "@/components/dashboard/workspace";
 import type { CloneJob } from "@/components/dashboard/data";
 import {
   ApiError,
-  downloadFigmaSvgBlob,
-  downloadFigmaZipBlob,
   downloadZipBlob,
   pagePreviewUrl,
   triggerBrowserDownload,
@@ -87,6 +86,7 @@ function ClonePage() {
   const [notice, setNotice] = useState("");
   const [logTail, setLogTail] = useState<string[]>([]);
   const [githubOpen, setGithubOpen] = useState(false);
+  const [figmaOpen, setFigmaOpen] = useState(false);
   const [exportBusy, setExportBusy] = useState("");
   const busy = phase === "running";
   const stage = STAGES.reduce((active, item, index) => (progress >= item.at ? index : active), 0);
@@ -552,32 +552,10 @@ function ClonePage() {
             <button
               type="button"
               className="dashboard-button"
-              disabled={!!exportBusy}
-              onClick={() =>
-                void withExport("figma-svg", async () => {
-                  const { blob, filename } = await downloadFigmaSvgBlob(run.outDir!, "/");
-                  triggerBrowserDownload(blob, filename);
-                  setNotice("Figma SVG downloaded.");
-                })
-              }
+              onClick={() => setFigmaOpen(true)}
             >
               <Figma size={16} />
-              {exportBusy === "figma-svg" ? "Exporting…" : "Figma SVG"}
-            </button>
-            <button
-              type="button"
-              className="dashboard-button"
-              disabled={!!exportBusy}
-              onClick={() =>
-                void withExport("figma-zip", async () => {
-                  const { blob, filename } = await downloadFigmaZipBlob(run.outDir!);
-                  triggerBrowserDownload(blob, filename);
-                  setNotice("Figma ZIP downloaded.");
-                })
-              }
-            >
-              <Figma size={16} />
-              {exportBusy === "figma-zip" ? "Exporting…" : "Figma ZIP"}
+              Export to Figma
             </button>
             <button
               type="button"
@@ -591,6 +569,12 @@ function ClonePage() {
           <GitHubPushDialog
             open={githubOpen}
             onOpenChange={setGithubOpen}
+            outDir={run.outDir}
+            domain={run.domain}
+          />
+          <ExportFigmaDialog
+            open={figmaOpen}
+            onOpenChange={setFigmaOpen}
             outDir={run.outDir}
             domain={run.domain}
           />
