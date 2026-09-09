@@ -124,8 +124,9 @@ export function GitHubPushDialog({
         </DialogTitle>
         <DialogDescription>
           Pushes captured clone files to GitHub. Needs a paid plan and a PAT with{" "}
-          <strong>repo</strong> scope. If <code>owner/repo</code> does not exist under your user, we
-          try to create it. Token stays in this browser tab only.
+          <strong>repo</strong> scope. Empty repos are fine (we create the first commit). If{" "}
+          <code>owner/repo</code> does not exist under your user, we try to create it. Token stays in
+          this browser tab only.
         </DialogDescription>
         <div className="mt-4 space-y-3">
           <label className="block text-sm">
