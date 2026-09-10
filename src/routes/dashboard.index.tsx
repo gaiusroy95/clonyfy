@@ -167,10 +167,15 @@ function ClonePage() {
         }
         if (status === "error") {
           const lastErr =
+            [...allLogs].reverse().find((l) =>
+              /\[ERROR\]|robots\.txt blocks|captured 0 pages|timed out|Page capture timed out|Could not start|Clone process exited/i.test(
+                l,
+              ),
+            ) ||
             [...allLogs].reverse().find((l) => /error/i.test(l)) ||
             "Clone failed. Check the URL and try again.";
           setPhase("error");
-          setError(lastErr.replace(/^\[ERROR\]\s*/i, ""));
+          setError(lastErr.replace(/^\[(ERROR|WARN)\]\s*/i, ""));
           addJob({
             id: jobId,
             domain: job.hostname || run.domain,
